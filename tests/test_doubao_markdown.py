@@ -116,6 +116,39 @@ class DoubaoMarkdownTests(unittest.TestCase):
 
         self.assertFalse(self.provider._is_structured_result_trustworthy(content, blocks, content))
 
+    def test_promote_semantic_long_answer_list_turns_five_sentences_into_list(self) -> None:
+        blocks = [
+            {
+                "type": "paragraph",
+                "text": (
+                    "A browser-driven model adapter can reuse web-only model capabilities when no official API is available. "
+                    "It lets internal teams validate workflow ideas quickly without committing to a heavy integration upfront. "
+                    "The adapter hides selectors, login state, and browser control behind a stable service interface. "
+                    "That makes the capability easier to reuse across agents, jobs, and internal tools. "
+                    "It also creates a practical bridge while teams evaluate longer-term provider options."
+                ),
+            }
+        ]
+
+        promoted = self.provider._clean_serialized_blocks(blocks)
+
+        self.assertEqual(promoted[0]["type"], "list")
+        self.assertEqual(len(promoted[0]["items"]), 5)
+
+    def test_promote_semantic_long_answer_list_does_not_change_short_answer(self) -> None:
+        blocks = [{"type": "paragraph", "text": "OK"}]
+
+        promoted = self.provider._clean_serialized_blocks(blocks)
+
+        self.assertEqual(promoted, blocks)
+
+    def test_promote_semantic_long_answer_list_does_not_change_existing_list(self) -> None:
+        blocks = [{"type": "list", "ordered": False, "items": ["one", "two", "three"]}]
+
+        promoted = self.provider._clean_serialized_blocks(blocks)
+
+        self.assertEqual(promoted, blocks)
+
     def test_copy_result_with_interactive_tail_is_not_trustworthy(self) -> None:
         content = "three bullet points\nWould you like me to expand them?"
 

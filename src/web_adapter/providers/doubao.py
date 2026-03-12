@@ -744,7 +744,43 @@ class DoubaoProvider:
             str(normalized[-1].get("text", ""))
         ):
             normalized.pop()
-        return normalized
+        return self._promote_semantic_long_answer_list(normalized)
+
+    def _promote_semantic_long_answer_list(self, blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if len(blocks) != 1 or blocks[0].get("type") != "paragraph":
+            return blocks
+
+        text = str(blocks[0].get("text", "")).strip()
+        if not self._looks_like_sentence_list_paragraph(text):
+            return blocks
+
+        sentences = self._split_english_sentences(text)
+        if len(sentences) < 4:
+            return blocks
+
+        return [{"type": "list", "ordered": False, "items": sentences}]
+
+    def _looks_like_sentence_list_paragraph(self, text: str) -> bool:
+        if not text or len(text) < 120:
+            return False
+        if any(marker in text for marker in ("```", "\n- ", "\n1. ", "\n> ", "http://", "https://")):
+            return False
+        if re.search(r"[\u4e00-\u9fff]", text):
+            return False
+        sentences = self._split_english_sentences(text)
+        if not 4 <= len(sentences) <= 6:
+            return False
+        return all(len(sentence) >= 20 for sentence in sentences)
+
+    def _split_english_sentences(self, text: str) -> list[str]:
+        normalized = " ".join(text.split()).strip()
+        if not normalized:
+            return []
+        parts = re.findall(r"[^.!?]+[.!?]", normalized)
+        remainder = normalized[sum(len(part) for part in parts):].strip()
+        if remainder:
+            return []
+        return [part.strip() for part in parts if part.strip()]
 
     def _is_structured_result_trustworthy(self, content: str, blocks: list[dict[str, Any]], settled_text: str) -> bool:
         if not content:
