@@ -97,6 +97,29 @@ class DoubaoMarkdownTests(unittest.TestCase):
         )
 
 
+    def test_clean_markdown_tail_removes_english_follow_up(self) -> None:
+        content = (
+            "- one\n- two\n- three\n\n"
+            "Would you like me to turn these into concise English points as well?"
+        )
+
+        cleaned = self.provider._clean_markdown_tail(content)
+
+        self.assertEqual(cleaned, "- one\n- two\n- three")
+
+    def test_structured_result_with_interactive_tail_is_not_trustworthy(self) -> None:
+        content = "- one\n- two\n- three\n\nWould you like me to turn these into concise English points as well?"
+        blocks = [
+            {"type": "list", "ordered": False, "items": ["one", "two", "three"]},
+            {"type": "paragraph", "text": "Would you like me to turn these into concise English points as well?"},
+        ]
+
+        self.assertFalse(self.provider._is_structured_result_trustworthy(content, blocks, content))
+
+    def test_copy_result_with_interactive_tail_is_not_trustworthy(self) -> None:
+        content = "three bullet points\nWould you like me to expand them?"
+
+        self.assertFalse(self.provider._is_copy_result_trustworthy(content, content))
 
 if __name__ == "__main__":
     unittest.main()

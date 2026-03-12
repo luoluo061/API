@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any, Literal
 
@@ -35,13 +35,27 @@ class ArtifactPayload(BaseModel):
     retry_count: int = 0
 
 
+class DiagnosticsPayload(BaseModel):
+    extraction_path: str | None = None
+    content_format: Literal["markdown", "text"] | None = None
+    completion_signals: dict[str, Any] = Field(default_factory=dict)
+    response_length: int | None = None
+    fallback_used: bool = False
+    browser_mode: str | None = None
+    login_state_source: str | None = None
+    page_ready: bool | None = None
+
+
 class ChatResponse(BaseModel):
     request_id: str
     provider: str
     status: Literal["ok", "error"]
-    content: str | None = None
+    content_markdown: str | None = None
+    blocks: list[dict[str, Any]] = Field(default_factory=list)
     usage_like_meta: dict[str, Any] = Field(default_factory=dict)
     artifacts: ArtifactPayload = Field(default_factory=ArtifactPayload)
+    diagnostics: DiagnosticsPayload = Field(default_factory=DiagnosticsPayload)
+    content: str | None = None
     error: ErrorPayload | None = None
 
 
@@ -51,6 +65,7 @@ class ProfileVerifyResponse(BaseModel):
     status: Literal["ok", "error"]
     login_state: Literal["logged_in", "login_required", "unknown"]
     artifacts: ArtifactPayload = Field(default_factory=ArtifactPayload)
+    diagnostics: DiagnosticsPayload = Field(default_factory=DiagnosticsPayload)
     error: ErrorPayload | None = None
 
 

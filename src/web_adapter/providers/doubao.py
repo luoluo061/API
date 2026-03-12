@@ -444,6 +444,7 @@ class DoubaoProvider:
                     request_id=context.request_id,
                     provider=self.name,
                     copied_length=len(copied),
+                    reason="structured_tail_detected" if self._has_interactive_tail(content) else "structured_too_short",
                 )
             else:
                 append_request_log(
@@ -454,7 +455,7 @@ class DoubaoProvider:
                     copied_length=len(copied),
                 )
 
-        if not content:
+        if not content and settled_text:
             content = settled_text
             extraction_path = "settled_text_fallback"
             content_format = "text"
@@ -466,6 +467,19 @@ class DoubaoProvider:
                 provider=self.name,
                 settled_length=len(settled_text),
             )
+        if not content:
+            content = self._sanitize_response_text(await self._extract_latest_response_text(page))
+            if content:
+                extraction_path = "plain_text_fallback"
+                content_format = "text"
+                blocks = []
+                append_request_log(
+                    context.artifacts.request_log_path,
+                    "plain_text_fallback_used",
+                    request_id=context.request_id,
+                    provider=self.name,
+                    plain_text_length=len(content),
+                )
         if not content:
             raise AdapterError("extract_empty", provider=self.name)
 
@@ -662,9 +676,7 @@ class DoubaoProvider:
             return False
         if not signals.get("action_bar_visible"):
             return False
-        if stable_hits < 2 and not (signals.get("regenerate_visible") or signals.get("copy_visible")):
-            return False
-        return stable_hits >= 2 or signals.get("regenerate_visible") or signals.get("copy_visible")
+        return stable_hits >= 2
     async def _wait_for_settled_response_text(self, page, hinted: str) -> str:
         best = self._sanitize_response_text(hinted)
         stable = best
@@ -741,6 +753,15 @@ class DoubaoProvider:
             return False
         if settled_text and not blocks:
             return False
+        if self._has_interactive_tail(content):
+            return False
+        if blocks and self._block_has_interactive_tail(blocks[-1]):
+            return False
+        if any(block.get("type") == "heading" and str(block.get("text", "")).strip() == "\u603b\u7ed3" for block in blocks):
+            has_code = any(block.get("type") == "code_block" for block in blocks)
+            has_list = any(block.get("type") == "list" for block in blocks)
+            if has_list and not has_code and content.count("\n") < 2:
+                return False
         return True
 
     def _is_copy_result_trustworthy(self, content: str, settled_text: str) -> bool:
@@ -748,12 +769,32 @@ class DoubaoProvider:
             return False
         if settled_text and len(content) < max(40, int(len(settled_text) * 0.7)):
             return False
+        if self._has_interactive_tail(content):
+            return False
         return True
 
     def _clean_copy_text(self, text: str) -> str:
         cleaned = self._sanitize_response_text(text)
         cleaned = self._clean_markdown_tail(cleaned)
         return cleaned.strip()
+
+    def _block_has_interactive_tail(self, block: dict[str, Any]) -> bool:
+        block_type = block.get("type")
+        if block_type in {"paragraph", "blockquote", "heading"}:
+            return self._looks_like_interactive_tail(str(block.get("text", "")))
+        if block_type == "list":
+            items = [str(item) for item in block.get("items", [])]
+            return bool(items and self._looks_like_interactive_tail(items[-1]))
+        return False
+
+    def _has_interactive_tail(self, content: str) -> bool:
+        stripped = content.strip()
+        if not stripped:
+            return False
+        lines = [line.strip() for line in stripped.splitlines() if line.strip()]
+        if not lines:
+            return False
+        return self._looks_like_interactive_tail(lines[-1])
     async def _extract_via_copy(self, page, latest_receive) -> str:
         if latest_receive is None:
             return ""
@@ -817,6 +858,11 @@ class DoubaoProvider:
             "\nHow can I",
             "\nCan I use",
             "\nWhat if I want",
+            "\nWould you like me",
+            "\nWould you like a",
+            "\nWould you like these",
+            "\nDo you want me",
+            "\nShould I",
             "\n\u7528\u4e00\u53e5\u8bdd\u6982\u62ec",
             "\nOpenAI\u5b98\u7f51\u7684\u5408\u4f5c\u6848\u4f8b",
             "\n\u4ecb\u7ecd\u4e00\u4e0bOpenAI\u7684\u5b89\u5168\u529f\u80fd",
@@ -836,6 +882,11 @@ class DoubaoProvider:
             "How can I",
             "Can I use",
             "What if I want",
+            "Would you like me",
+            "Would you like a",
+            "Would you like these",
+            "Do you want me",
+            "Should I",
             "\u7528\u4e00\u53e5\u8bdd\u6982\u62ec",
             "OpenAI\u5b98\u7f51\u7684",
             "\u4ecb\u7ecd\u4e00\u4e0bOpenAI\u7684\u5b89\u5168\u529f\u80fd",
@@ -861,6 +912,11 @@ class DoubaoProvider:
             "\nOpenAI\u5b98\u7f51\u9996\u9875\u7684",
             "\n\u5982\u4f55\u5229\u7528OpenAI\u7684\u4f01\u4e1a\u89e3\u51b3\u65b9\u6848",
             "\n\u9700\u8981\u6211\u5e2e\u4f60\u6574\u7406",
+            "\nWould you like me",
+            "\nWould you like a",
+            "\nWould you like these",
+            "\nDo you want me",
+            "\nShould I",
             "\n\u53c2\u8003 ",
         ]
         for marker in suggestion_markers:
@@ -869,7 +925,7 @@ class DoubaoProvider:
                 sanitized = sanitized[:position].rstrip()
 
         sanitized = re.sub(r"(https?://[^\s]+?)([A-Z][A-Za-z0-9._-]*)$", r"\1", sanitized)
-        sanitized = re.sub(r"([\u4e00-\u9fffA-Za-z0-9])OpenAI\u3002", r"\1 OpenAI。", sanitized)
+        sanitized = re.sub(r"([\u4e00-\u9fffA-Za-z0-9])OpenAI\u3002", r"\1 OpenAI?", sanitized)
         return sanitized.strip()
 
 

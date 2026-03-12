@@ -16,6 +16,7 @@ from web_adapter.models import (
     ArtifactPayload,
     ChatRequest,
     ChatResponse,
+    DiagnosticsPayload,
     ErrorPayload,
     HealthComponent,
     HealthResponse,
@@ -72,6 +73,11 @@ class AdapterService:
                     status="ok",
                     login_state="logged_in",
                     artifacts=self._artifact_payload(artifacts, session.runtime_profile_path, page_url=session.page.url if session.page else None),
+                    diagnostics=DiagnosticsPayload(
+                        browser_mode=self.settings.browser_mode,
+                        login_state_source="provider_prepare",
+                        page_ready=True,
+                    ),
                 )
         except AdapterError as exc:
             if context is not None:
@@ -94,6 +100,11 @@ class AdapterService:
                     artifacts,
                     session.runtime_profile_path if session is not None else None,
                     page_url=session.page.url if session is not None and session.page is not None else None,
+                ),
+                diagnostics=DiagnosticsPayload(
+                    browser_mode=self.settings.browser_mode,
+                    login_state_source="login_indicator" if exc.error_key == "login_required" else "provider_prepare",
+                    page_ready=False if exc.error_key == "page_not_ready" else None,
                 ),
                 error=self._error_payload(exc),
             )
@@ -142,13 +153,26 @@ class AdapterService:
                     await session.context.tracing.stop(path=str(artifacts.trace_path))
 
                 append_request_log(artifacts.request_log_path, "chat_request_finished", request_id=request_id, provider=request.provider, status="ok")
+                blocks = list(result.usage_like_meta.get("blocks", []))
+                content_markdown = result.content
+                diagnostics = DiagnosticsPayload(
+                    extraction_path=result.usage_like_meta.get("extraction_path"),
+                    content_format=result.usage_like_meta.get("content_format"),
+                    completion_signals=result.usage_like_meta.get("completion_signals", {}),
+                    response_length=result.usage_like_meta.get("response_length"),
+                    fallback_used=result.usage_like_meta.get("extraction_path") in {"copy_fallback", "settled_text_fallback", "plain_text_fallback"},
+                    browser_mode=self.settings.browser_mode,
+                )
                 return ChatResponse(
                     request_id=request_id,
                     provider=request.provider,
                     status="ok",
-                    content=result.content,
+                    content_markdown=content_markdown,
+                    blocks=blocks,
                     usage_like_meta=result.usage_like_meta,
                     artifacts=self._artifact_payload(artifacts, session.runtime_profile_path, page_url=result.page_url),
+                    diagnostics=diagnostics,
+                    content=content_markdown,
                 )
         except AdapterError as exc:
             if context is not None:
@@ -166,12 +190,15 @@ class AdapterService:
                 request_id=request_id,
                 provider=request.provider,
                 status="error",
-                content=None,
+                content_markdown=None,
+                blocks=[],
                 artifacts=self._artifact_payload(
                     artifacts,
                     session.runtime_profile_path if session is not None else None,
                     page_url=session.page.url if session is not None and session.page is not None else None,
                 ),
+                diagnostics=DiagnosticsPayload(browser_mode=self.settings.browser_mode),
+                content=None,
                 error=self._error_payload(exc),
             )
         finally:
@@ -212,22 +239,18 @@ class AdapterService:
         master_status, master_detail = self.browser.inspect_master_profile()
 
         provider_status = "warn"
-        provider_detail = "provider verify not run"
+        provider_detail = "use /profiles/verify to validate CDP login state and page readiness"
         if self.settings.mock_mode:
             provider_status = "ok"
             provider_detail = "mock provider ready"
-        elif browser_status == "ok":
-            if self.settings.browser_mode == "cdp":
-                provider_detail = "cdp reachable; use /profiles/verify for login and page readiness"
-            else:
-                provider_detail = "browser ready; use /profiles/verify for login and page readiness"
+        elif browser_status != "ok":
+            provider_detail = "CDP unavailable; verify browser startup and /json/version"
 
-        runtime_status = "ok"
-        runtime_detail = str(self.settings.runtime_profile_root)
+        runtime_status = "warn"
+        runtime_detail = f"{self.settings.runtime_profile_root} (unused in default CDP mode)"
         self.settings.runtime_profile_root.mkdir(parents=True, exist_ok=True)
-        if self.settings.browser_mode == "cdp":
-            runtime_status = "warn"
-            runtime_detail = f"{self.settings.runtime_profile_root} (unused in default CDP mode)"
+
+        master_detail = f"{master_detail} (compatibility field; CDP mode does not require launch-time profile reuse)"
 
         return HealthResponse(
             service=HealthComponent(status="ok", detail=self.settings.app_name),

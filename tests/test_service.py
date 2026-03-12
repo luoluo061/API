@@ -44,6 +44,7 @@ class AdapterServiceTests(unittest.TestCase):
         self.assertEqual(response.browser.status, "ok")
         self.assertEqual(response.master_profile.status, "ok")
         self.assertTrue(response.mock_mode)
+        self.assertEqual(response.provider.detail, "mock provider ready")
 
     def test_chat_returns_mock_response(self) -> None:
         tmp_path = Path("tmp_test_chat")
@@ -53,7 +54,10 @@ class AdapterServiceTests(unittest.TestCase):
 
         self.assertEqual(response.status, "ok")
         self.assertEqual(response.provider, "doubao")
-        self.assertTrue(response.content.startswith("[mock:doubao]"))
+        self.assertTrue(response.content_markdown.startswith("[mock:doubao]"))
+        self.assertEqual(response.content, response.content_markdown)
+        self.assertEqual(response.blocks, [])
+        self.assertEqual(response.diagnostics.browser_mode, "cdp")
 
     def test_verify_profile_returns_logged_in_in_mock_mode(self) -> None:
         tmp_path = Path("tmp_test_verify")
@@ -63,6 +67,8 @@ class AdapterServiceTests(unittest.TestCase):
 
         self.assertEqual(response.status, "ok")
         self.assertEqual(response.login_state, "logged_in")
+        self.assertEqual(response.diagnostics.browser_mode, "cdp")
+        self.assertTrue(response.diagnostics.page_ready)
 
     def test_missing_master_profile_is_reported(self) -> None:
         tmp_path = Path("tmp_test_missing_master")
