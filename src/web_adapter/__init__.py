@@ -1,0 +1,1 @@
+"""Web LLM adapter package."""
