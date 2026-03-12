@@ -187,6 +187,10 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/chat" -ContentType "a
 - `code_block`
 - `blockquote`
 
+补充约定：
+- 当页面 DOM 没有显式 `li`，但回答语义明显是多句列表型长答时，适配层可能将其规范化为 `list`
+- 因此上层应优先按 `blocks` 消费结构，而不是假设长答一定以单段 `paragraph` 返回
+
 #### `usage_like_meta.references`
 参考链接列表，尤其用于联网类回答。
 
