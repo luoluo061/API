@@ -9,14 +9,9 @@
 - `/v1/models` 和 `/v1/chat/completions` 作为最小 OpenAI-compatible shim
 - Continue 已完成真实接入验证
 
-当前明确运行约束：
-- 服务必须在 `E:\API` 目录下启动
-- 启动命令固定为：
-
-```powershell
-cd E:\API
-py -m uvicorn web_adapter.main:app --host 127.0.0.1 --port 8000
-```
+本轮新增的工程目标：
+- 去掉关键路径对当前 working directory 的依赖
+- 提供下载后可直接使用的配置、脚本和文档
 
 ## 已验证结论
 
@@ -35,21 +30,36 @@ py -m uvicorn web_adapter.main:app --host 127.0.0.1 --port 8000
 - Continue 自动发出的标题请求成功
 - 服务端 SSE 结构与最小 OpenAI chunk 形状兼容
 
+## 当前版本运行方式
+
+推荐启动方式：
+
+```powershell
+cd E:\API
+.\scripts\open_doubao_cdp.ps1
+.\scripts\start_server.ps1
+```
+
+当前版本默认按项目根目录解析以下关键路径：
+- `.profiles/masters/doubao-edge`
+- `.profiles/runtime/doubao-edge`
+- `.artifacts`
+
+同时支持环境变量覆盖，并兼容旧的 `WEB_LLM_*` 变量。
+
 ## 下一步顺序
 
 ### 1. 冻结并整理 Phase 1
 
-- 固化 README 中的启动方式、Continue 配置、运行约束
-- 清理测试残留与 Git 状态
-- 记录 Continue 已验证通过
+- 固化 README 中的 Quick Start、Continue 配置、API 示例
 - 保持 `/chat` 主链路不变
+- 保持当前最小 OpenAI-compatible shim 稳定
 
 ### 2. 优化 OpenAI `messages -> prompt` 映射
 
 - 继续复用 `/chat`
 - 只优化兼容层映射策略
 - 目标是减少网页侧直接看到 `System: ... User: ...` 的模板痕迹
-- 不改变当前已打通的协议链路
 
 ### 3. 进入 Phase 2：Streaming 优化
 
@@ -63,16 +73,6 @@ py -m uvicorn web_adapter.main:app --host 127.0.0.1 --port 8000
 - 再扩展图片 / 文档
 - 最后再评估更复杂的多模态组合输入
 
-## Git 管理建议
-
-- 当前阶段先把 Phase 1 相关改动单独收口提交
-- 提交内容建议只包含：
-  - OpenAI-compatible shim
-  - Continue 验证相关文档
-  - 测试
-  - `.gitignore` 清理
-- 不要把运行时 `.artifacts`、`.profiles`、临时测试目录提交进仓库
-
 ## 一句话总结
 
-项目当前已经从“豆包专用 HTTP API”升级为“可被 Continue 这类 OpenAI-compatible 客户端真实接入的桥接服务”，下一步优先做 Phase 1 收口和映射优化，再进入流式增强。
+项目当前已经从“豆包专用 HTTP API”升级为“可被 Continue 这类 OpenAI-compatible 客户端真实接入的桥接服务”，并且已经具备下载后按脚本和文档启动、验证和接入的基础落地能力。

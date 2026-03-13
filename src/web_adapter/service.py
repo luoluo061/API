@@ -14,7 +14,7 @@ from web_adapter.browser import BrowserManager, BrowserSession
 from web_adapter.config import Settings, settings
 from web_adapter.diagnostics import DiagnosticStore
 from web_adapter.errors import AdapterError
-from web_adapter.logging_utils import append_request_log, configure_logging
+from web_adapter.logging_utils import append_request_log, configure_logging, log_event
 from web_adapter.models import (
     ArtifactPayload,
     ChatRequest,
@@ -305,6 +305,7 @@ def create_app(settings_obj: Settings = settings) -> FastAPI:
     async def lifespan(_: FastAPI):
         settings_obj.artifact_dir.mkdir(parents=True, exist_ok=True)
         settings_obj.runtime_profile_root.mkdir(parents=True, exist_ok=True)
+        log_event("startup_configuration", **settings_obj.startup_summary())
         if settings_obj.startup_browser_check:
             await service.browser.startup()
         yield

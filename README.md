@@ -33,6 +33,89 @@
 
 `launch` 和 persistent profile 相关实现仍保留在代码里，但不再作为默认主路径。
 
+## Quick Start
+
+### 1. 下载后先做什么
+
+```powershell
+cd E:\API
+py -m pip install -e .[dev]
+Copy-Item .env.example .env
+```
+
+默认情况下，关键路径会按项目根目录解析，不再依赖当前 working directory。
+
+### 2. 准备已登录的豆包浏览器 / CDP
+
+```powershell
+.\scripts\open_doubao_cdp.ps1
+```
+
+然后在打开的 Edge 里：
+- 登录豆包
+- 手工发送一条消息，确认网页能正常收到回答
+- 保持该窗口不要关闭
+
+检查 CDP 是否可连：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:9222/json/version
+```
+
+### 3. 启动服务
+
+```powershell
+.\scripts\start_server.ps1
+```
+
+启动时服务会打印实际解析出的关键配置，包括：
+- `project_root`
+- `master_profile_dir`
+- `runtime_profile_root`
+- `artifact_dir`
+- `browser_mode`
+- `cdp_url`
+- `host`
+- `port`
+
+### 4. 验证 `/health` 和 `/v1/models`
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+Invoke-RestMethod http://127.0.0.1:8000/v1/models
+```
+
+预期：
+- `/health` 返回服务状态，且在 CDP 正常时 `browser.status = ok`
+- `/v1/models` 返回固定模型名 `doubao-web`
+
+### 5. 调用 `/v1/chat/completions`
+
+PowerShell：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/chat/completions" -ContentType "application/json" -Headers @{ Authorization = "Bearer dummy" } -Body '{"model":"doubao-web","messages":[{"role":"user","content":"Reply with exactly OK."}],"stream":false}'
+```
+
+### 6. 配置 Continue
+
+`C:\Users\tang7\.continue\config.yaml`
+
+```yaml
+name: Local Config
+version: 1.0.0
+schema: v1
+
+models:
+  - name: Doubao Web
+    provider: openai
+    model: doubao-web
+    apiBase: http://127.0.0.1:8000/v1
+    apiKey: dummy
+    roles:
+      - chat
+```
+
 ## 系统架构
 
 ```text
@@ -76,7 +159,13 @@ Playwright / CDP 浏览器接入层
 
 ### 1. 启动已登录 Edge
 
-使用专用 `user-data-dir` 启动 Edge，并保持窗口打开：
+推荐直接用脚本：
+
+```powershell
+.\scripts\open_doubao_cdp.ps1
+```
+
+等价的手工方式如下：
 
 ```powershell
 & 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' --remote-debugging-port=9222 --user-data-dir="E:\API\.profiles\masters\doubao-edge" "https://www.doubao.com/chat/"
@@ -99,20 +188,30 @@ Invoke-RestMethod http://127.0.0.1:9222/json/version
 
 ### 3. 启动服务
 
+推荐直接用脚本：
+
+```powershell
+.\scripts\start_server.ps1
+```
+
+等价的手工方式如下：
+
 ```powershell
 cd E:\API
 py -m pip install -e .
-$env:WEB_LLM_BROWSER_MODE = "cdp"
-$env:WEB_LLM_CDP_URL = "http://127.0.0.1:9222"
-$env:WEB_LLM_MASTER_PROFILE_DIR = "E:\API\.profiles\masters\doubao-edge"
-$env:WEB_LLM_TRACE_MODE = "failure"
-$env:WEB_LLM_MOCK_MODE = "0"
+$env:BROWSER_MODE = "cdp"
+$env:CDP_URL = "http://127.0.0.1:9222"
+$env:MASTER_PROFILE_DIR = ".profiles/masters/doubao-edge"
+$env:TRACE_MODE = "failure"
+$env:MOCK_MODE = "0"
+$env:PYTHONPATH = "src"
 py -m uvicorn web_adapter.main:app --host 127.0.0.1 --port 8000
 ```
 
-注意：
-- 当前版本必须在 `E:\API` 目录下启动服务
-- 如果从其他工作目录启动，`.profiles\masters\doubao-edge` 会按相对路径错误解析，导致 `master_profile_missing`
+说明：
+- 当前版本默认按项目根目录解析相对路径
+- 不再依赖当前 working directory 去解析 `.profiles\masters\doubao-edge`
+- 标准启动方式仍然建议使用项目根目录下的脚本
 
 ## 本地测试
 
@@ -220,6 +319,34 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/chat/completions" 
 ```powershell
 $body = '{"model":"doubao-web","messages":[{"role":"user","content":"Reply with exactly OK."}],"stream":true}'
 Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:8000/v1/chat/completions" -ContentType "application/json" -Headers @{ Authorization = "Bearer dummy" } -Body $body
+```
+
+`curl` 示例：
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer dummy" \
+  -d "{\"model\":\"doubao-web\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly OK.\"}],\"stream\":false}"
+```
+
+Python `requests` 示例：
+
+```python
+import requests
+
+response = requests.post(
+    "http://127.0.0.1:8000/v1/chat/completions",
+    headers={"Authorization": "Bearer dummy"},
+    json={
+        "model": "doubao-web",
+        "messages": [{"role": "user", "content": "Reply with exactly OK."}],
+        "stream": False,
+    },
+    timeout=120,
+)
+response.raise_for_status()
+print(response.json()["choices"][0]["message"]["content"])
 ```
 
 ## Continue 接入
@@ -386,21 +513,27 @@ models:
 ## 环境变量
 
 核心变量：
-- `WEB_LLM_BROWSER_MODE`：`cdp` 或 `launch`，默认 `cdp`
-- `WEB_LLM_CDP_URL`：默认 `http://127.0.0.1:9222`
-- `WEB_LLM_MASTER_PROFILE_DIR`：用于手工启动 Edge 的专用目录
-- `WEB_LLM_TRACE_MODE`：`off`、`failure`、`always`
-- `WEB_LLM_MOCK_MODE`：`1` 表示跳过真实浏览器
-- `WEB_LLM_REQUEST_TIMEOUT_SECONDS`
-- `WEB_LLM_QUEUE_WAIT_SECONDS`
-- `WEB_LLM_ARTIFACT_DIR`
+- `BROWSER_MODE`：`cdp` 或 `launch`，默认 `cdp`
+- `CDP_URL`：默认 `http://127.0.0.1:9222`
+- `MASTER_PROFILE_DIR`：默认 `.profiles/masters/doubao-edge`
+- `RUNTIME_PROFILE_DIR`：默认 `.profiles/runtime/doubao-edge`
+- `ARTIFACT_DIR`：默认 `.artifacts`
+- `HOST`：默认 `127.0.0.1`
+- `PORT`：默认 `8000`
+- `TRACE_MODE`：`off`、`failure`、`always`
+- `MOCK_MODE`：`1` 表示跳过真实浏览器
+- `REQUEST_TIMEOUT_SECONDS`
+- `QUEUE_WAIT_SECONDS`
+
+兼容变量：
+- 现有 `WEB_LLM_*` 变量仍可继续使用
+- 若同时设置了新变量和 `WEB_LLM_*`，新变量优先
 
 实验性变量：
-- `WEB_LLM_HEADLESS`
-- `WEB_LLM_PROFILE_MODE`
-- `WEB_LLM_RUNTIME_PROFILE_ROOT`
-- `WEB_LLM_RUNTIME_PROFILE_RETENTION`
-- `WEB_LLM_BROWSER_CHANNEL`
+- `HEADLESS`
+- `PROFILE_MODE`
+- `RUNTIME_PROFILE_RETENTION`
+- `BROWSER_CHANNEL`
 
 ## 边界
 
