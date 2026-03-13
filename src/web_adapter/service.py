@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from typing import Any
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from web_adapter.browser import BrowserManager, BrowserSession
 from web_adapter.config import Settings, settings
@@ -22,6 +25,17 @@ from web_adapter.models import (
     HealthResponse,
     ProfileVerifyRequest,
     ProfileVerifyResponse,
+)
+from web_adapter.openai_compat import (
+    OpenAICompatError,
+    OpenAIModelsResponse,
+    build_streaming_chunks,
+    build_models_response,
+    current_timestamp,
+    map_chat_response_to_openai,
+    map_error_to_openai,
+    map_openai_request_to_chat_request,
+    serialize_response_body,
 )
 from web_adapter.providers import DoubaoProvider
 from web_adapter.providers.base import ProviderContext
@@ -310,6 +324,131 @@ def create_app(settings_obj: Settings = settings) -> FastAPI:
     @app.get("/health", response_model=HealthResponse)
     async def health_endpoint() -> HealthResponse:
         return await service.health()
+
+    @app.get("/v1/models", response_model=OpenAIModelsResponse)
+    async def openai_models_endpoint() -> OpenAIModelsResponse:
+        return build_models_response()
+
+    @app.post("/v1/chat/completions")
+    async def openai_chat_completions_endpoint(request: Request):
+        request_id = uuid4().hex
+        artifacts = service.diagnostics.create(request_id)
+        raw_body = await request.body()
+        body_text = raw_body.decode("utf-8", errors="replace")
+
+        try:
+            payload = json.loads(body_text) if body_text else {}
+        except json.JSONDecodeError:
+            error = OpenAICompatError(400, "Request body must be valid JSON.", "invalid_request_error", "invalid_json")
+            append_request_log(
+                artifacts.request_log_path,
+                "openai_chat_completions_finished",
+                request_id=request_id,
+                headers=dict(request.headers),
+                raw_body=body_text,
+                stream=None,
+                messages=None,
+                normalized_messages=None,
+                prompt=None,
+                status_code=error.status_code,
+                content_type="application/json",
+                response_body=error.payload.model_dump(),
+            )
+            return JSONResponse(status_code=error.status_code, content=error.payload.model_dump())
+
+        append_request_log(
+            artifacts.request_log_path,
+            "openai_chat_completions_started",
+            request_id=request_id,
+            headers=dict(request.headers),
+            raw_body=body_text,
+        )
+
+        try:
+            chat_request, compat_meta = map_openai_request_to_chat_request(payload)
+        except OpenAICompatError as exc:
+            append_request_log(
+                artifacts.request_log_path,
+                "openai_chat_completions_finished",
+                request_id=request_id,
+                headers=dict(request.headers),
+                raw_body=body_text,
+                stream=payload.get("stream"),
+                messages=payload.get("messages"),
+                normalized_messages=None,
+                prompt=None,
+                status_code=exc.status_code,
+                content_type="application/json",
+                response_body=exc.payload.model_dump(),
+            )
+            return JSONResponse(status_code=exc.status_code, content=exc.payload.model_dump())
+
+        response = await service.chat(chat_request)
+        if response.status == "error":
+            status_code, error = map_error_to_openai(response.error)
+            append_request_log(
+                artifacts.request_log_path,
+                "openai_chat_completions_finished",
+                request_id=request_id,
+                headers=dict(request.headers),
+                raw_body=body_text,
+                stream=compat_meta["stream"],
+                messages=compat_meta["message_summary"],
+                normalized_messages=compat_meta["normalized_messages"],
+                prompt=compat_meta["prompt"],
+                status_code=status_code,
+                content_type="application/json",
+                response_body=error.model_dump(),
+            )
+            return JSONResponse(status_code=status_code, content=error.model_dump())
+
+        created = current_timestamp()
+        if compat_meta["stream"]:
+            chunks = build_streaming_chunks(response, created=created)
+            append_request_log(
+                artifacts.request_log_path,
+                "openai_chat_completions_finished",
+                request_id=request_id,
+                headers=dict(request.headers),
+                raw_body=body_text,
+                stream=True,
+                messages=compat_meta["message_summary"],
+                normalized_messages=compat_meta["normalized_messages"],
+                prompt=compat_meta["prompt"],
+                status_code=200,
+                content_type="text/event-stream; charset=utf-8",
+                response_body="".join(chunks),
+            )
+
+            async def event_stream():
+                for chunk in chunks:
+                    yield chunk
+
+            return StreamingResponse(
+                event_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                },
+            )
+
+        payload_body = map_chat_response_to_openai(response, created=created)
+        append_request_log(
+            artifacts.request_log_path,
+            "openai_chat_completions_finished",
+            request_id=request_id,
+            headers=dict(request.headers),
+            raw_body=body_text,
+            stream=False,
+            messages=compat_meta["message_summary"],
+            normalized_messages=compat_meta["normalized_messages"],
+            prompt=compat_meta["prompt"],
+            status_code=200,
+            content_type="application/json",
+            response_body=serialize_response_body(payload_body),
+        )
+        return payload_body
 
     @app.exception_handler(AdapterError)
     async def adapter_error_handler(_, exc: AdapterError) -> JSONResponse:

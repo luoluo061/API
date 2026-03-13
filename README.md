@@ -24,6 +24,13 @@
 - 默认 provider：`doubao`
 - 默认调用方式：`POST /chat`
 
+当前已验证的兼容层能力：
+- `GET /v1/models`
+- `POST /v1/chat/completions`
+- OpenAI-compatible 非流式响应
+- OpenAI-compatible SSE 流式响应
+- Continue 作为 OpenAI provider 的真实接入
+
 `launch` 和 persistent profile 相关实现仍保留在代码里，但不再作为默认主路径。
 
 ## 系统架构
@@ -103,6 +110,35 @@ $env:WEB_LLM_MOCK_MODE = "0"
 py -m uvicorn web_adapter.main:app --host 127.0.0.1 --port 8000
 ```
 
+注意：
+- 当前版本必须在 `E:\API` 目录下启动服务
+- 如果从其他工作目录启动，`.profiles\masters\doubao-edge` 会按相对路径错误解析，导致 `master_profile_missing`
+
+## 本地测试
+
+安装开发依赖：
+
+```powershell
+cd E:\API
+py -m pip install -e .[dev]
+```
+
+运行测试：
+
+```powershell
+py -m pytest
+```
+
+说明：
+- 仓库已在 `pyproject.toml` 中配置 `src` 作为测试导入路径
+- 如果本机没有把 Python Scripts 目录加入 `PATH`，优先使用 `py -m pytest`，不要依赖裸 `pytest`
+
+OpenAI-compatible 兼容层测试：
+
+```powershell
+py -m pytest tests/test_openai_compat.py -q
+```
+
 ## 接口
 
 ### `GET /health`
@@ -151,6 +187,84 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/profiles/verify" -Con
 ```powershell
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/chat" -ContentType "application/json" -Body '{"provider":"doubao","prompt":"Reply with exactly OK."}'
 ```
+
+### `GET /v1/models`
+
+最小 OpenAI-compatible 模型列表接口。
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/v1/models
+```
+
+当前首版固定只返回一个外部模型名：
+- `doubao-web`
+
+### `POST /v1/chat/completions`
+
+最小 OpenAI-compatible 聊天接口。
+
+当前已验证：
+- 支持 `model = doubao-web`
+- 支持 `stream = true`
+- 返回 SSE `chat.completion.chunk`
+- 可被 Continue 作为 OpenAI provider 真实消费
+
+最小示例：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/chat/completions" -ContentType "application/json" -Body '{"model":"doubao-web","messages":[{"role":"user","content":"Reply with exactly OK."}],"stream":false}'
+```
+
+流式示例：
+
+```powershell
+$body = '{"model":"doubao-web","messages":[{"role":"user","content":"Reply with exactly OK."}],"stream":true}'
+Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:8000/v1/chat/completions" -ContentType "application/json" -Headers @{ Authorization = "Bearer dummy" } -Body $body
+```
+
+## Continue 接入
+
+Continue 首轮验证已通过，当前正确配置如下：
+
+`C:\Users\tang7\.continue\config.yaml`
+
+```yaml
+name: Local Config
+version: 1.0.0
+schema: v1
+
+models:
+  - name: Doubao Web
+    provider: openai
+    model: doubao-web
+    apiBase: http://127.0.0.1:8000/v1
+    apiKey: dummy
+    roles:
+      - chat
+```
+
+已验证的真实链路：
+- Continue 发出 `POST /v1/chat/completions`
+- `user-agent = OpenAI/JS 5.23.2`
+- `stream = true`
+- 服务端进入豆包 provider
+- 豆包真实返回
+- 服务端以 SSE 返回
+- Continue 正常显示回答
+- Continue 会自动再发一个标题请求，当前也已验证成功
+
+当前已验证的样例包括：
+- `Reply with exactly OK.`
+- `Reply with exactly YES.`
+- `Reply with exactly HELLO.`
+- `Reply in one short sentence: what is 2+2?`
+- `Give me 3 short bullet points about apples.`
+
+说明：
+- Continue 会自动携带自己的 `system` 提示词模板
+- 当前兼容层会把 `messages` 压平成单个 prompt，再送入网页 provider
+- 因此豆包网页输入框里会看到 `System: ...` / `User: ...` 文本
+- 这不影响当前 Phase 1 的协议兼容验证结论，只是后续可优化的映射策略
 
 ## `/chat` 响应协议
 

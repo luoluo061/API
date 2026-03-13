@@ -11,6 +11,7 @@ venv/
 .pytest_cache/
 .coverage
 htmlcov/
+tmp_test_openai_*/
 
 # Local runtime artifacts
 .artifacts/
